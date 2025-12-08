@@ -29,8 +29,8 @@ using the exact **SLD styling**, competitor locations, and Google Satellite base
 
 BARANGAY_SHP_PATH = "data/bulacanbarangay.shp"
 
-BRGY_NAME_COL = "barangay"
-CITYMUN_COL = "citymun"
+BRGY_NAME_COL = "ADM4_EN"
+CITYMUN_COL = "ADM3_EN"
 SCORE_COL = "mean_0"
 
 # Competitors (Google Sheet CSV URL stored in secrets)
