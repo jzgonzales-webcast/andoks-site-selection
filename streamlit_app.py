@@ -37,7 +37,7 @@ SCORE_COL = "mean_0"
 COMPETITORS_SHEET_CSV_URL = st.secrets.get("competitors", {}).get("sheet_csv_url", "")
 
 # Exact sheet columns you provided:
-COMP_LONG = "longtitude"
+COMP_LONG = "longitude"
 COMP_LAT = "latitude"
 COMP_BRAND = "brand"
 
