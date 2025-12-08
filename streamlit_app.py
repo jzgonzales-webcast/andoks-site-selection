@@ -1,6 +1,5 @@
 import os
-from typing import Optional
-
+import random
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -8,44 +7,7 @@ import pydeck as pdk
 import streamlit as st
 
 # ----------------------------------------------------------
-# CONFIG / CONSTANTS
-# ----------------------------------------------------------
-
-# Paths (relative to repo root)
-BARANGAY_SHP_PATH = "data/bulacanbarangay.shp"
-
-# Column names in the shapefile – ADJUST THESE TO MATCH YOUR DATA
-BRGY_NAME_COL = "barangay"      # e.g. "BRGY", "BRGY_NM", etc.
-CITYMUN_COL = "citymun"         # e.g. "MUN_NAME", "CITY_MUN"
-SCORE_COL = "mean_0"            # as per your info
-
-BRGY_NAME_COL = "ADM4_EN"      # e.g. "BRGY", "BRGY_NM", etc.
-CITYMUN_COL = "ADM3_EN"         # e.g. "MUN_NAME", "CITY_MUN"
-SCORE_COL = "mean_0"            # as per your info
-
-# Competitors Google Sheet CSV URL:
-# Option 1: from secrets.toml
-COMPETITORS_SHEET_CSV_URL = st.secrets.get(
-    "competitors", {}
-).get(
-    "sheet_csv_url",
-    ""  # fallback if not set in secrets
-)
-
-# If you want to hardcode (for quick test), uncomment and paste:
-# COMPETITORS_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/.../export?format=csv&gid=0"
-
-# Column names in competitors sheet – ADJUST THESE TO MATCH YOUR SHEET
-COMP_BRAND_COL = "brand"
-COMP_CAT_COL = "category"
-COMP_CITYMUN_COL = "citymun"
-COMP_PROV_COL = "province"
-COMP_LAT_COL = "latitude"
-COMP_LON_COL = "longitude"
-
-
-# ----------------------------------------------------------
-# BASIC PAGE CONFIG
+# PAGE CONFIG
 # ----------------------------------------------------------
 st.set_page_config(
     page_title="Andok's Site Selection – Bulacan",
@@ -56,95 +18,131 @@ st.title("Andok's Site Selection – Bulacan (Per Barangay Prototype)")
 
 st.markdown(
     """
-This prototype dashboard shows **per-barangay site selection scores** in **Bulacan**,
-with an **interactive map on Google Satellite** and **score tables per municipality and barangay**.
-
-- Map background: Google Satellite (for prototyping)
-- Score source: `mean_0` column in your Bulacan barangay shapefile
-- Competitors: loaded from a Google Sheet (partial data for now)
+This dashboard displays **barangay-level suitability scores** across **Bulacan**,  
+using the exact **SLD styling**, competitor locations, and Google Satellite basemap.
 """
 )
 
+# ----------------------------------------------------------
+# CONSTANTS
+# ----------------------------------------------------------
+
+BARANGAY_SHP_PATH = "data/bulacanbarangay.shp"
+
+BRGY_NAME_COL = "barangay"
+CITYMUN_COL = "citymun"
+SCORE_COL = "mean_0"
+
+# Competitors (Google Sheet CSV URL stored in secrets)
+COMPETITORS_SHEET_CSV_URL = st.secrets.get("competitors", {}).get("sheet_csv_url", "")
+
+COMP_LONG = "longtitude"   # NOTE: spelling from your sheet
+COMP_LAT = "latitude"
+COMP_BRAND = "brand"
 
 # ----------------------------------------------------------
-# DATA LOADING HELPERS (CACHED)
+# LOAD BARANGAY FILE
 # ----------------------------------------------------------
 
 @st.cache_data(show_spinner=True)
-def load_barangays(shp_path: str) -> gpd.GeoDataFrame:
-    gdf = gpd.read_file(shp_path)
+def load_barangays(path):
+    gdf = gpd.read_file(path)
 
-    # Ensure CRS is WGS84
+    # Ensure WGS84 CRS
     if gdf.crs is None or gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
 
-    # Standardize columns we will use; create generic ones for convenience
-    # (If your columns differ, adjust BRGY_NAME_COL, etc.)
-    missing = [c for c in [BRGY_NAME_COL, CITYMUN_COL, SCORE_COL] if c not in gdf.columns]
-    if missing:
-        st.error(
-            f"Missing expected columns in shapefile: {missing}. "
-            f"Please check BRGY_NAME_COL/CITYMUN_COL/SCORE_COL at top of script."
-        )
-        st.stop()
+    # Validate columns
+    required = [BRGY_NAME_COL, CITYMUN_COL, SCORE_COL]
+    for col in required:
+        if col not in gdf.columns:
+            st.error(f"Missing column '{col}' in barangay shapefile.")
+            st.stop()
 
-    # Create standard columns
-    gdf = gdf.copy()
     gdf["barangay_name"] = gdf[BRGY_NAME_COL].astype(str)
     gdf["citymun_name"] = gdf[CITYMUN_COL].astype(str)
     gdf["score"] = pd.to_numeric(gdf[SCORE_COL], errors="coerce")
 
-    # Drop rows with null geometry or score if necessary
-    gdf = gdf[~gdf.geometry.isna()].copy()
-
+    gdf = gdf[~gdf.geometry.isna()]
     return gdf
 
+gdf_barangays = load_barangays(BARANGAY_SHP_PATH)
+
+# ----------------------------------------------------------
+# LOAD COMPETITORS FROM GOOGLE SHEET
+# ----------------------------------------------------------
 
 @st.cache_data(show_spinner=True)
-def load_competitors_from_sheet(sheet_csv_url: str) -> Optional[pd.DataFrame]:
-    if not sheet_csv_url:
-        return None
+def load_competitors(sheet_url):
+    if not sheet_url:
+        return pd.DataFrame()
 
     try:
-        df = pd.read_csv(sheet_csv_url)
+        df = pd.read_csv(sheet_url)
     except Exception as e:
-        st.warning(f"Could not load competitors from Google Sheet: {e}")
-        return None
+        st.warning(f"Could not load competitors data: {e}")
+        return pd.DataFrame()
 
-    # Check required columns
-    required_cols = [COMP_BRAND_COL, COMP_LAT_COL, COMP_LON_COL]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        st.warning(
-            f"Competitors sheet is missing expected columns: {missing}. "
-            f"Please adjust COMP_*_COL constants in the script."
-        )
-        return None
+    expected_cols = [COMP_LONG, COMP_LAT, COMP_BRAND]
+    for col in expected_cols:
+        if col not in df.columns:
+            st.warning(f"Competitors sheet is missing column '{col}'. Found columns: {df.columns.tolist()}")
+            return pd.DataFrame()
 
-    # Basic cleanup
-    df = df.copy()
-    df["brand"] = df[COMP_BRAND_COL].astype(str)
-    df["category"] = df.get(COMP_CAT_COL, "").astype(str) if COMP_CAT_COL in df.columns else ""
-    df["citymun"] = df.get(COMP_CITYMUN_COL, "").astype(str) if COMP_CITYMUN_COL in df.columns else ""
-    df["province"] = df.get(COMP_PROV_COL, "").astype(str) if COMP_PROV_COL in df.columns else ""
-    df["lat"] = pd.to_numeric(df[COMP_LAT_COL], errors="coerce")
-    df["lon"] = pd.to_numeric(df[COMP_LON_COL], errors="coerce")
+    df["lon"] = pd.to_numeric(df[COMP_LONG], errors="coerce")
+    df["lat"] = pd.to_numeric(df[COMP_LAT], errors="coerce")
+    df["brand"] = df[COMP_BRAND].astype(str)
 
-    df = df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+    df = df.dropna(subset=["lat","lon"])
     return df
 
+df_competitors = load_competitors(COMPETITORS_SHEET_CSV_URL)
 
 # ----------------------------------------------------------
-# LOAD DATA
+# APPLY SLD STYLING
 # ----------------------------------------------------------
 
-gdf_barangays = load_barangays(BARANGAY_SHP_PATH)
-df_competitors = load_competitors_from_sheet(COMPETITORS_SHEET_CSV_URL)
+def sld_color(mean_0):
+    if mean_0 is None:
+        return [200, 200, 200, 150]
 
-# Province is fixed to Bulacan here, but we keep city/mun selection dynamic
-citymun_list = sorted(gdf_barangays["citymun_name"].unique().tolist())
-citymun_list_display = ["All municipalities"] + citymun_list
+    # EXACT COLORS FROM YOUR SLD
+    if 1.02915619443098993 <= mean_0 <= 1.67021351760768:
+        return [215, 25, 28, 150]
+    elif 1.67021351760768 < mean_0 <= 2.11293581101225003:
+        return [232, 91, 59, 150]
+    elif 2.11293581101225003 < mean_0 <= 2.47597288754775002:
+        return [249, 157, 89, 150]
+    elif 2.47597288754775002 < mean_0 <= 2.85005666392968982:
+        return [254, 201, 129, 150]
+    elif 2.85005666392968982 < mean_0 <= 3.18201286704618003:
+        return [255, 237, 171, 150]
+    elif 3.18201286704618003 < mean_0 <= 3.52431534195362017:
+        return [235, 247, 173, 150]
+    elif 3.52431534195362017 < mean_0 <= 3.92996775043785984:
+        return [196, 230, 135, 150]
+    elif 3.92996775043785984 < mean_0 <= 4.44667928886414021:
+        return [150, 210, 101, 150]
+    elif 4.44667928886414021 < mean_0 <= 5.04817327088676038:
+        return [88, 180, 83, 150]
+    elif 5.04817327088676038 < mean_0 <= 6.22406019477859029:
+        return [26, 150, 65, 150]
+    else:
+        return [200, 200, 200, 150]
 
+gdf_barangays["fill_color"] = gdf_barangays["score"].apply(sld_color)
+
+# ----------------------------------------------------------
+# RANDOM COLORS FOR COMPETITOR BRANDS
+# ----------------------------------------------------------
+
+def random_color():
+    return [random.randint(0,255), random.randint(0,255), random.randint(0,255), 230]
+
+if not df_competitors.empty:
+    brands = df_competitors["brand"].unique().tolist()
+    brand_color_map = {b: random_color() for b in brands}
+    df_competitors["color"] = df_competitors["brand"].map(brand_color_map)
 
 # ----------------------------------------------------------
 # SIDEBAR FILTERS
@@ -152,209 +150,99 @@ citymun_list_display = ["All municipalities"] + citymun_list
 
 st.sidebar.header("Filters")
 
-selected_citymun = st.sidebar.selectbox(
-    "Municipality / City",
-    options=citymun_list_display,
-    index=0,
-)
+city_list = sorted(gdf_barangays["citymun_name"].unique())
+city_choice = ["All"] + city_list
 
-min_score = float(np.nanmin(gdf_barangays["score"]))
-max_score = float(np.nanmax(gdf_barangays["score"]))
-
-score_range = st.sidebar.slider(
-    "Score range (mean_0)",
-    float(round(min_score, 3)),
-    float(round(max_score, 3)),
-    (float(round(min_score, 3)), float(round(max_score, 3))),
-    step=0.01,
-)
-
-show_comp_layer = st.sidebar.checkbox("Show competitors", value=True)
-
-
-# ----------------------------------------------------------
-# FILTER DATA ACCORDING TO SELECTION
-# ----------------------------------------------------------
+selected_city = st.sidebar.selectbox("Municipality / City", city_choice)
 
 gdf_filtered = gdf_barangays.copy()
-
-if selected_citymun != "All municipalities":
-    gdf_filtered = gdf_filtered[gdf_filtered["citymun_name"] == selected_citymun]
-
-gdf_filtered = gdf_filtered[
-    (gdf_filtered["score"] >= score_range[0]) &
-    (gdf_filtered["score"] <= score_range[1])
-].copy()
-
-if gdf_filtered.empty:
-    st.warning("No barangays match the current filters.")
-    st.stop()
-
+if selected_city != "All":
+    gdf_filtered = gdf_filtered[gdf_filtered["citymun_name"] == selected_city]
 
 # ----------------------------------------------------------
-# COLOR MAPPING FOR SCORES
+# BUILD MAP
 # ----------------------------------------------------------
 
-def score_to_color(score: float):
-    """Return [R, G, B, A] for a score between min_score and max_score."""
-    if pd.isna(score):
-        return [200, 200, 200, 180]
+centroid = gdf_filtered.geometry.unary_union.centroid
 
-    # Normalize 0–1 using global min/max to keep colors consistent
-    norm = (score - min_score) / (max_score - min_score + 1e-9)
-    # Red (low) -> Yellow (mid) -> Green (high)
-    if norm < 0.33:
-        return [230, 30, 30, 180]      # red
-    elif norm < 0.66:
-        return [255, 165, 0, 180]      # orange
-    else:
-        return [0, 180, 0, 180]        # green
-
-gdf_filtered["fill_color"] = gdf_filtered["score"].apply(score_to_color)
-
-
-# ----------------------------------------------------------
-# BUILD MAP (PYDECK WITH GOOGLE SATELLITE)
-# ----------------------------------------------------------
-
-# GeoJsonLayer for barangays
-barangay_layer = pdk.Layer(
-    "GeoJsonLayer",
-    data=gdf_filtered,
-    pickable=True,
-    stroked=True,
-    filled=True,
-    get_fill_color="fill_color",
-    get_line_color=[255, 255, 255],
-    get_line_width=1,
-    auto_highlight=True,
+view_state = pdk.ViewState(
+    latitude=centroid.y,
+    longitude=centroid.x,
+    zoom=11,
+    pitch=0,
 )
 
-layers = []
-
-# Tile layer with Google Satellite (for prototyping)
+# Google Satellite Layer
 tile_layer = pdk.Layer(
     "TileLayer",
     data=None,
     minZoom=0,
     maxZoom=19,
     tileSize=256,
-    get_tile_data=None,
-    pickable=False,
-    # Google satellite tiles (prototype only)
-    # For production, use a proper map provider and API key.
     url_template="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
 )
 
-layers.append(tile_layer)
-layers.append(barangay_layer)
+# Barangay polygons
+barangay_layer = pdk.Layer(
+    "GeoJsonLayer",
+    data=gdf_filtered,
+    pickable=True,
+    filled=True,
+    stroked=True,
+    get_fill_color="fill_color",
+    get_line_color=[50, 50, 50, 180],
+    get_line_width=1,
+    auto_highlight=True,
+)
 
-# Competitors layer (if data is available and toggle is on)
-if show_comp_layer and df_competitors is not None and not df_competitors.empty:
-    comp_layer = pdk.Layer(
+layers = [tile_layer, barangay_layer]
+
+# Competitors drawn ABOVE polygons
+if not df_competitors.empty:
+    competitor_layer = pdk.Layer(
         "ScatterplotLayer",
         data=df_competitors,
         get_position="[lon, lat]",
-        get_radius=60,
-        get_fill_color=[0, 0, 255, 200],
+        get_fill_color="color",
+        get_radius=90,
         pickable=True,
     )
-    layers.append(comp_layer)
-
-# Compute initial view state from filtered barangays
-centroid = gdf_filtered.geometry.unary_union.centroid
-view_state = pdk.ViewState(
-    latitude=centroid.y,
-    longitude=centroid.x,
-    zoom=11,
-    pitch=0,
-    bearing=0,
-)
+    layers.append(competitor_layer)
 
 # Tooltip
 tooltip = {
     "html": (
         "<b>{barangay_name}</b>, {citymun_name}<br/>"
-        "Score (mean_0): {score}<br/>"
+        "Score: <b>{score}</b>"
     ),
-    "style": {
-        "backgroundColor": "steelblue",
-        "color": "white",
-    },
+    "style": {"backgroundColor": "steelblue", "color": "white"}
 }
 
 deck = pdk.Deck(
     layers=layers,
     initial_view_state=view_state,
     tooltip=tooltip,
-    map_style=None,  # None because we are using a custom TileLayer (Google Satellite)
+    map_style=None,
 )
 
-st.subheader("Interactive Map – Bulacan Barangays (mean_0 score)")
+st.subheader("Barangay Suitability Map (Styled using your SLD)")
 st.pydeck_chart(deck)
 
-
 # ----------------------------------------------------------
-# TABLES: MUNICIPALITY SUMMARY + BARANGAY RANKING
+# SUMMARY TABLES
 # ----------------------------------------------------------
 
-st.subheader("Score Summary")
+st.subheader("Municipality Summary")
 
-# Municipality-level summary (based on filtered set or whole Bulacan)
-if selected_citymun == "All municipalities":
-    gdf_for_summary = gdf_barangays.copy()
-else:
-    gdf_for_summary = gdf_barangays[gdf_barangays["citymun_name"] == selected_citymun].copy()
-
-mun_summary = (
-    gdf_for_summary
-    .groupby("citymun_name")["score"]
+summary = (
+    gdf_barangays.groupby("citymun_name")["score"]
     .agg(["count", "mean", "min", "max"])
     .reset_index()
-    .rename(columns={
-        "citymun_name": "Municipality/City",
-        "count": "No. of Barangays",
-        "mean": "Average Score",
-        "min": "Min Score",
-        "max": "Max Score",
-    })
-    .sort_values("Average Score", ascending=False)
 )
 
-st.markdown("**Municipality / City summary (Bulacan)**")
-st.dataframe(
-    mun_summary.style.format(
-        {
-            "Average Score": "{:.3f}",
-            "Min Score": "{:.3f}",
-            "Max Score": "{:.3f}",
-        }
-    ),
-    use_container_width=True,
-)
+st.dataframe(summary, use_container_width=True)
 
-# Barangay-level detail table (filtered)
-st.markdown(
-    f"**Barangay scores for: "
-    f"{'All municipalities' if selected_citymun == 'All municipalities' else selected_citymun}**"
-)
-
-brgy_table = (
-    gdf_filtered[["barangay_name", "citymun_name", "score"]]
-    .sort_values("score", ascending=False)
-    .reset_index(drop=True)
-)
-brgy_table.index = brgy_table.index + 1  # 1-based rank
-
-brgy_table = brgy_table.rename(
-    columns={
-        "barangay_name": "Barangay",
-        "citymun_name": "Municipality/City",
-        "score": "Score (mean_0)",
-    }
-)
-
-st.dataframe(
-    brgy_table.style.format({"Score (mean_0)": "{:.3f}"}),
-    use_container_width=True,
-)
+st.subheader("Barangay Ranking")
+rank_table = gdf_filtered[["barangay_name","citymun_name","score"]].sort_values("score", ascending=False)
+rank_table.index = rank_table.index + 1
+st.dataframe(rank_table, use_container_width=True)
