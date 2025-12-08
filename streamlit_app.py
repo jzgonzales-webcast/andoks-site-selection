@@ -19,6 +19,10 @@ BRGY_NAME_COL = "barangay"      # e.g. "BRGY", "BRGY_NM", etc.
 CITYMUN_COL = "citymun"         # e.g. "MUN_NAME", "CITY_MUN"
 SCORE_COL = "mean_0"            # as per your info
 
+BRGY_NAME_COL = "ADM4_EN"      # e.g. "BRGY", "BRGY_NM", etc.
+CITYMUN_COL = "ADM3_EN"         # e.g. "MUN_NAME", "CITY_MUN"
+SCORE_COL = "mean_0"            # as per your info
+
 # Competitors Google Sheet CSV URL:
 # Option 1: from secrets.toml
 COMPETITORS_SHEET_CSV_URL = st.secrets.get(
