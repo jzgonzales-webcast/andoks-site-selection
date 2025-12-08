@@ -36,12 +36,13 @@ SCORE_COL = "mean_0"
 # Competitors (Google Sheet CSV URL stored in secrets)
 COMPETITORS_SHEET_CSV_URL = st.secrets.get("competitors", {}).get("sheet_csv_url", "")
 
-COMP_LONG = "longtitude"   # NOTE: spelling from your sheet
+# Exact sheet columns you provided:
+COMP_LONG = "longtitude"
 COMP_LAT = "latitude"
 COMP_BRAND = "brand"
 
 # ----------------------------------------------------------
-# LOAD BARANGAY FILE
+# LOAD BARANGAYS
 # ----------------------------------------------------------
 
 @st.cache_data(show_spinner=True)
@@ -68,6 +69,7 @@ def load_barangays(path):
 
 gdf_barangays = load_barangays(BARANGAY_SHP_PATH)
 
+
 # ----------------------------------------------------------
 # LOAD COMPETITORS FROM GOOGLE SHEET
 # ----------------------------------------------------------
@@ -78,7 +80,8 @@ def load_competitors(sheet_url):
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(sheet_url)
+        # Let pandas detect delimiter automatically
+        df = pd.read_csv(sheet_url, sep=None, engine="python")
     except Exception as e:
         st.warning(f"Could not load competitors data: {e}")
         return pd.DataFrame()
@@ -86,27 +89,28 @@ def load_competitors(sheet_url):
     expected_cols = [COMP_LONG, COMP_LAT, COMP_BRAND]
     for col in expected_cols:
         if col not in df.columns:
-            st.warning(f"Competitors sheet is missing column '{col}'. Found columns: {df.columns.tolist()}")
+            st.warning(f"Competitors sheet missing column '{col}'. Columns found: {df.columns.tolist()}")
             return pd.DataFrame()
 
     df["lon"] = pd.to_numeric(df[COMP_LONG], errors="coerce")
     df["lat"] = pd.to_numeric(df[COMP_LAT], errors="coerce")
     df["brand"] = df[COMP_BRAND].astype(str)
 
-    df = df.dropna(subset=["lat","lon"])
+    df = df.dropna(subset=["lat", "lon"])
     return df
+
 
 df_competitors = load_competitors(COMPETITORS_SHEET_CSV_URL)
 
+
 # ----------------------------------------------------------
-# APPLY SLD STYLING
+# SLD STYLING FUNCTION
 # ----------------------------------------------------------
 
 def sld_color(mean_0):
     if mean_0 is None:
         return [200, 200, 200, 150]
 
-    # EXACT COLORS FROM YOUR SLD
     if 1.02915619443098993 <= mean_0 <= 1.67021351760768:
         return [215, 25, 28, 150]
     elif 1.67021351760768 < mean_0 <= 2.11293581101225003:
@@ -130,7 +134,9 @@ def sld_color(mean_0):
     else:
         return [200, 200, 200, 150]
 
+
 gdf_barangays["fill_color"] = gdf_barangays["score"].apply(sld_color)
+
 
 # ----------------------------------------------------------
 # RANDOM COLORS FOR COMPETITOR BRANDS
@@ -143,6 +149,7 @@ if not df_competitors.empty:
     brands = df_competitors["brand"].unique().tolist()
     brand_color_map = {b: random_color() for b in brands}
     df_competitors["color"] = df_competitors["brand"].map(brand_color_map)
+
 
 # ----------------------------------------------------------
 # SIDEBAR FILTERS
@@ -159,8 +166,9 @@ gdf_filtered = gdf_barangays.copy()
 if selected_city != "All":
     gdf_filtered = gdf_filtered[gdf_filtered["citymun_name"] == selected_city]
 
+
 # ----------------------------------------------------------
-# BUILD MAP
+# BUILD THE MAP
 # ----------------------------------------------------------
 
 centroid = gdf_filtered.geometry.unary_union.centroid
@@ -179,10 +187,9 @@ tile_layer = pdk.Layer(
     minZoom=0,
     maxZoom=19,
     tileSize=256,
-    url_template="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+    url_template="https://mt1.google.com/vt/lyxrs=s&x={x}&y={y}&z={z}".replace("lyxrs","lyrs"),
 )
 
-# Barangay polygons
 barangay_layer = pdk.Layer(
     "GeoJsonLayer",
     data=gdf_filtered,
@@ -197,7 +204,7 @@ barangay_layer = pdk.Layer(
 
 layers = [tile_layer, barangay_layer]
 
-# Competitors drawn ABOVE polygons
+# Competitors ABOVE polygons
 if not df_competitors.empty:
     competitor_layer = pdk.Layer(
         "ScatterplotLayer",
@@ -209,13 +216,12 @@ if not df_competitors.empty:
     )
     layers.append(competitor_layer)
 
-# Tooltip
 tooltip = {
     "html": (
         "<b>{barangay_name}</b>, {citymun_name}<br/>"
         "Score: <b>{score}</b>"
     ),
-    "style": {"backgroundColor": "steelblue", "color": "white"}
+    "style": {"backgroundColor": "steelblue", "color": "white"},
 }
 
 deck = pdk.Deck(
@@ -225,8 +231,9 @@ deck = pdk.Deck(
     map_style=None,
 )
 
-st.subheader("Barangay Suitability Map (Styled using your SLD)")
+st.subheader("Barangay Suitability Map (Styled using SLD)")
 st.pydeck_chart(deck)
+
 
 # ----------------------------------------------------------
 # SUMMARY TABLES
