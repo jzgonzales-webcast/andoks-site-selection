@@ -161,7 +161,7 @@ def load_andoks_branches(path: str) -> pd.DataFrame:
     df = raw.copy()
     df.columns = df.columns.str.strip().str.lower()
 
-    required_cols = ["name", "address", "latitude", "longitude"]
+    required_cols = ["outlet name", "outlet address", "latitude", "longitude"]
     for col in required_cols:
         if col not in df.columns:
             st.warning(
