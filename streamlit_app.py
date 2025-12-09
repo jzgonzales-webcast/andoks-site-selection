@@ -1,5 +1,8 @@
 import os
 import random
+import base64
+from io import BytesIO
+
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -32,8 +35,10 @@ BRGY_NAME_COL = "ADM4_EN"
 CITYMUN_COL = "ADM3_EN"
 SCORE_COL = "mean_0"
 
-# Competitors source: XLSX file in repo data folder
+# Local Excel sources
 COMPETITORS_XLSX_PATH = "data/andoks-competitors.xlsx"
+BRANCHES_XLSX_PATH = "data/andoks-branches.xlsx"
+ANDOKS_ICON_PATH = "icon/andoks-icon.png"
 
 # ----------------------------------------------------------
 # LOAD BARANGAYS
@@ -94,7 +99,7 @@ def load_competitors_from_xlsx(path: str) -> pd.DataFrame:
     # Candidate names for each logical column
     long_candidates = ["longitude", "longtitude", "lon", "lng"]
     lat_candidates = ["latitude", "lat"]
-    brand_candidates = ["brand", "brand_name", "name"]
+    brand_candidates = ["brand", "brand_name"]
 
     def pick_column(candidates, available_cols):
         for c in candidates:
@@ -133,6 +138,84 @@ def load_competitors_from_xlsx(path: str) -> pd.DataFrame:
 df_competitors = load_competitors_from_xlsx(COMPETITORS_XLSX_PATH)
 
 # ----------------------------------------------------------
+# LOAD ANDOK'S BRANCHES FROM XLSX
+# ----------------------------------------------------------
+
+@st.cache_data(show_spinner=True)
+def load_andoks_branches(path: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        st.warning(f"Andok's branches file not found at: {path}")
+        return pd.DataFrame()
+
+    try:
+        raw = pd.read_excel(path)
+    except Exception as e:
+        st.warning(f"Could not load andoks-branches.xlsx: {e}")
+        return pd.DataFrame()
+
+    if raw.empty:
+        st.warning("Andok's branches file is empty.")
+        return pd.DataFrame()
+
+    # Normalize column names
+    df = raw.copy()
+    df.columns = df.columns.str.strip().str.lower()
+
+    required_cols = ["name", "address", "latitude", "longitude"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.warning(
+                f"Andok's branches file missing column '{col}'. "
+                f"Found: {df.columns.tolist()}"
+            )
+            return pd.DataFrame()
+
+    df["lat"] = pd.to_numeric(df["latitude"], errors="coerce")
+    df["lon"] = pd.to_numeric(df["longitude"], errors="coerce")
+    df["name"] = df["name"].astype(str)
+    df["address"] = df["address"].astype(str)
+
+    df = df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+    return df
+
+
+df_branches = load_andoks_branches(BRANCHES_XLSX_PATH)
+
+# ----------------------------------------------------------
+# LOAD ANDOK'S ICON (PNG → BASE64)
+# ----------------------------------------------------------
+
+@st.cache_data(show_spinner=True)
+def load_andoks_icon(path: str):
+    if not os.path.exists(path):
+        st.warning(f"Andok's icon not found at: {path}")
+        return None
+    try:
+        with open(path, "rb") as f:
+            img_bytes = f.read()
+    except Exception as e:
+        st.warning(f"Could not read Andok's icon: {e}")
+        return None
+
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+    # Width/height are approximate; adjust if needed
+    icon_spec = {
+        "url": f"data:image/png;base64,{b64}",
+        "width": 512,
+        "height": 512,
+        "anchorX": 256,   # center horizontally
+        "anchorY": 512,   # bottom vertically
+    }
+    return icon_spec
+
+
+andoks_icon_spec = load_andoks_icon(ANDOKS_ICON_PATH)
+
+if andoks_icon_spec is not None and not df_branches.empty:
+    df_branches["icon_data"] = [andoks_icon_spec] * len(df_branches)
+
+# ----------------------------------------------------------
 # SLD STYLING FUNCTION (EXACT FROM YOUR .sld)
 # ----------------------------------------------------------
 
@@ -167,7 +250,7 @@ def sld_color(mean_0):
 gdf_barangays["fill_color"] = gdf_barangays["score"].apply(sld_color)
 
 # ----------------------------------------------------------
-# RANDOM COLORS PER BRAND (DETERMINISTIC PER SESSION)
+# RANDOM COLORS PER COMPETITOR BRAND
 # ----------------------------------------------------------
 
 def random_color():
@@ -189,11 +272,13 @@ city_choice = ["All"] + city_list
 selected_city = st.sidebar.selectbox("Municipality / City", city_choice)
 
 show_competitors = st.sidebar.checkbox("Show competitors", value=True)
+show_andoks_branches = st.sidebar.checkbox("Show Andok's branches", value=True)
 
-# Debug info so you can confirm data is loading
+# Debug info
 st.sidebar.markdown("### Data info")
 st.sidebar.write(f"Barangays loaded: {len(gdf_barangays)}")
 st.sidebar.write(f"Competitors loaded (after cleaning): {len(df_competitors)}")
+st.sidebar.write(f"Andok's branches loaded: {len(df_branches)}")
 
 gdf_filtered = gdf_barangays.copy()
 if selected_city != "All":
@@ -203,10 +288,16 @@ if gdf_filtered.empty:
     st.warning("No barangays match the current filter.")
     st.stop()
 
-# Optional: preview competitors
+# Optional previews
 if not df_competitors.empty:
     st.expander("Preview competitors data").dataframe(
         df_competitors[["brand", "lat", "lon"]].head(),
+        use_container_width=True,
+    )
+
+if not df_branches.empty:
+    st.expander("Preview Andok's branches data").dataframe(
+        df_branches[["name", "address", "lat", "lon"]].head(),
         use_container_width=True,
     )
 
@@ -247,7 +338,7 @@ barangay_layer = pdk.Layer(
 
 layers = [tile_layer, barangay_layer]
 
-# Competitors ABOVE polygons, high contrast, with outlines
+# Competitors ABOVE polygons
 if show_competitors and not df_competitors.empty:
     competitor_layer = pdk.Layer(
         "ScatterplotLayer",
@@ -261,10 +352,29 @@ if show_competitors and not df_competitors.empty:
     )
     layers.append(competitor_layer)
 
+# Andok's branches as ICONS
+if (
+    show_andoks_branches
+    and andoks_icon_spec is not None
+    and not df_branches.empty
+):
+    andoks_layer = pdk.Layer(
+        "IconLayer",
+        data=df_branches,
+        get_position="[lon, lat]",
+        get_icon="icon_data",
+        get_size=4,
+        size_scale=10,
+        pickable=True,
+    )
+    layers.append(andoks_layer)
+
 tooltip = {
     "html": (
         "<b>{barangay_name}</b>, {citymun_name}<br/>"
-        "Score: <b>{score}</b>"
+        "Score: <b>{score}</b><br/>"
+        "<hr/>"
+        "<b>{name}</b><br/>{address}"
     ),
     "style": {"backgroundColor": "steelblue", "color": "white"},
 }
@@ -276,7 +386,7 @@ deck = pdk.Deck(
     map_style=None,
 )
 
-st.subheader("Barangay Suitability Map")
+st.subheader("Barangay Suitability Map (Styled using SLD)")
 st.pydeck_chart(deck)
 
 # ----------------------------------------------------------
