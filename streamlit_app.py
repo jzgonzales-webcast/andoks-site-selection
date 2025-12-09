@@ -14,12 +14,11 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Andok's Site Selection – Bulacan (Per Barangay Prototype)")
+st.title("Andok's Site Selection – Bulacan")
 
 st.markdown(
     """
-This dashboard displays **barangay-level suitability scores** across **Bulacan**,  
-using the exact **SLD styling**, competitor locations, and Google Satellite basemap.
+This dashboard displays **barangay-level suitability scores** across **Bulacan**
 """
 )
 
