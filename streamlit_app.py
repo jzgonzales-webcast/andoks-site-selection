@@ -18,7 +18,7 @@ st.title("Andok's Site Selection – Bulacan")
 
 st.markdown(
     """
-This dashboard displays **barangay-level suitability scores** across **Bulacan**
+This dashboard displays **barangay-level suitability scores** across **Bulacan**.
 """
 )
 
@@ -32,22 +32,15 @@ BRGY_NAME_COL = "ADM4_EN"
 CITYMUN_COL = "ADM3_EN"
 SCORE_COL = "mean_0"
 
-# Competitors (Google Sheet CSV URL stored in secrets.toml)
-# [competitors]
-# sheet_csv_url = "https://docs.google.com/spreadsheets/d/.../export?format=csv&gid=..."
-COMPETITORS_SHEET_CSV_URL = st.secrets.get("competitors", {}).get("sheet_csv_url", "")
-
-# Expected logical columns (we will map to these flexibly)
-EXPECTED_LONG = "longitude"   # as you specified
-EXPECTED_LAT = "latitude"
-EXPECTED_BRAND = "brand"
+# Competitors source: XLSX file in repo data folder
+COMPETITORS_XLSX_PATH = "data/andoks-competitors.xlsx"
 
 # ----------------------------------------------------------
 # LOAD BARANGAYS
 # ----------------------------------------------------------
 
 @st.cache_data(show_spinner=True)
-def load_barangays(path):
+def load_barangays(path: str) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path)
 
     # Ensure WGS84 CRS
@@ -57,7 +50,10 @@ def load_barangays(path):
     required = [BRGY_NAME_COL, CITYMUN_COL, SCORE_COL]
     for col in required:
         if col not in gdf.columns:
-            st.error(f"Missing column '{col}' in barangay shapefile. Columns: {gdf.columns.tolist()}")
+            st.error(
+                f"Missing column '{col}' in barangay shapefile. "
+                f"Columns: {gdf.columns.tolist()}"
+            )
             st.stop()
 
     gdf = gdf.copy()
@@ -68,63 +64,73 @@ def load_barangays(path):
 
     return gdf
 
+
 gdf_barangays = load_barangays(BARANGAY_SHP_PATH)
 
 # ----------------------------------------------------------
-# LOAD COMPETITORS (ROBUST TO HEADER VARIANTS)
+# LOAD COMPETITORS FROM XLSX (IN REPO)
 # ----------------------------------------------------------
 
 @st.cache_data(show_spinner=True)
-def load_competitors(sheet_url: str) -> pd.DataFrame:
-    if not sheet_url:
+def load_competitors_from_xlsx(path: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        st.warning(f"Competitors file not found at: {path}")
         return pd.DataFrame()
 
     try:
-        # Auto-detect delimiter, keep all rows
-        raw = pd.read_csv(sheet_url, sep=None, engine="python")
+        raw = pd.read_excel(path)
     except Exception as e:
-        st.warning(f"Could not load competitors data: {e}")
+        st.warning(f"Could not load competitors file: {e}")
         return pd.DataFrame()
 
     if raw.empty:
+        st.warning("Competitors file is empty.")
         return pd.DataFrame()
 
-    # Build mapping from normalized -> actual column names
-    # normalize = lowercase + stripped
-    norm_map = {c.strip().lower(): c for c in raw.columns}
+    # Normalize column names: lowercase + strip spaces
+    df = raw.copy()
+    df.columns = df.columns.str.strip().str.lower()
 
-    def resolve_col(logical_name: str) -> str | None:
-        key = logical_name.strip().lower()
-        return norm_map.get(key, None)
+    # Candidate names for each logical column
+    long_candidates = ["longitude", "longtitude", "lon", "lng"]
+    lat_candidates = ["latitude", "lat"]
+    brand_candidates = ["brand", "brand_name"]
 
-    col_lon = resolve_col(EXPECTED_LONG)
-    col_lat = resolve_col(EXPECTED_LAT)
-    col_brand = resolve_col(EXPECTED_BRAND)
+    def pick_column(candidates, available_cols):
+        for c in candidates:
+            if c in available_cols:
+                return c
+        return None
+
+    col_lon = pick_column(long_candidates, df.columns)
+    col_lat = pick_column(lat_candidates, df.columns)
+    col_brand = pick_column(brand_candidates, df.columns)
 
     missing = []
     if col_lon is None:
-        missing.append(EXPECTED_LONG)
+        missing.append(f"one of {long_candidates}")
     if col_lat is None:
-        missing.append(EXPECTED_LAT)
+        missing.append(f"one of {lat_candidates}")
     if col_brand is None:
-        missing.append(EXPECTED_BRAND)
+        missing.append(f"one of {brand_candidates}")
 
     if missing:
         st.warning(
-            f"Competitor sheet is missing expected columns (case/space-insensitive) {missing}. "
-            f"Columns found: {list(raw.columns)}"
+            "Competitors file is missing required columns.\n"
+            f"Expected: {missing}\n"
+            f"Found columns: {df.columns.tolist()}"
         )
         return pd.DataFrame()
 
-    df = raw.copy()
     df["lon"] = pd.to_numeric(df[col_lon], errors="coerce")
     df["lat"] = pd.to_numeric(df[col_lat], errors="coerce")
     df["brand"] = df[col_brand].astype(str)
 
-    df = df.dropna(subset=["lat", "lon"])
+    df = df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
     return df
 
-df_competitors = load_competitors(COMPETITORS_SHEET_CSV_URL)
+
+df_competitors = load_competitors_from_xlsx(COMPETITORS_XLSX_PATH)
 
 # ----------------------------------------------------------
 # SLD STYLING FUNCTION (EXACT FROM YOUR .sld)
@@ -156,6 +162,7 @@ def sld_color(mean_0):
         return [26, 150, 65, 150]      # #1a9641
     else:
         return [200, 200, 200, 150]
+
 
 gdf_barangays["fill_color"] = gdf_barangays["score"].apply(sld_color)
 
@@ -196,10 +203,11 @@ if gdf_filtered.empty:
     st.warning("No barangays match the current filter.")
     st.stop()
 
-# Optionally show a preview of competitors
+# Optional: preview competitors
 if not df_competitors.empty:
     st.expander("Preview competitors data").dataframe(
-        df_competitors[["brand", "lat", "lon"]].head(), use_container_width=True
+        df_competitors[["brand", "lat", "lon"]].head(),
+        use_container_width=True,
     )
 
 # ----------------------------------------------------------
@@ -222,7 +230,6 @@ tile_layer = pdk.Layer(
     minZoom=0,
     maxZoom=19,
     tileSize=256,
-    # small trick to avoid lyrs typo in string literal
     url_template="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
 )
 
