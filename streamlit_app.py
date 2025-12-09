@@ -276,7 +276,7 @@ deck = pdk.Deck(
     map_style=None,
 )
 
-st.subheader("Barangay Suitability Map (Styled using SLD)")
+st.subheader("Barangay Suitability Map")
 st.pydeck_chart(deck)
 
 # ----------------------------------------------------------
