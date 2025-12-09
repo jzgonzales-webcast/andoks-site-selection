@@ -182,32 +182,51 @@ def load_andoks_branches(path: str) -> pd.DataFrame:
 df_branches = load_andoks_branches(BRANCHES_XLSX_PATH)
 
 # ----------------------------------------------------------
-# LOAD ANDOK'S ICON (PNG → BASE64)
+# LOAD ANDOK'S ICON (REMOVE WHITE BACKGROUND)
 # ----------------------------------------------------------
+
+from PIL import Image
 
 @st.cache_data(show_spinner=True)
 def load_andoks_icon(path: str):
     if not os.path.exists(path):
         st.warning(f"Andok's icon not found at: {path}")
         return None
+
     try:
-        with open(path, "rb") as f:
-            img_bytes = f.read()
+        img = Image.open(path).convert("RGBA")
     except Exception as e:
         st.warning(f"Could not read Andok's icon: {e}")
         return None
 
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    # Remove white background
+    datas = img.getdata()
+    new_data = []
+    for item in datas:
+        # Detect white or near-white pixels
+        if item[0] > 240 and item[1] > 240 and item[2] > 240:
+            # Make transparent
+            new_data.append((255, 255, 255, 0))
+        else:
+            new_data.append(item)
 
-    # Width/height are approximate; adjust if needed
+    img.putdata(new_data)
+
+    # Encode PNG → Base64
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
     icon_spec = {
         "url": f"data:image/png;base64,{b64}",
-        "width": 512,
-        "height": 512,
-        "anchorX": 256,   # center horizontally
-        "anchorY": 512,   # bottom vertically
+        "width": img.width,
+        "height": img.height,
+        "anchorX": img.width // 2,
+        "anchorY": img.height,  # bottom anchor
     }
+
     return icon_spec
+
 
 
 andoks_icon_spec = load_andoks_icon(ANDOKS_ICON_PATH)
@@ -386,7 +405,7 @@ deck = pdk.Deck(
     map_style=None,
 )
 
-st.subheader("Barangay Suitability Map (Styled using SLD)")
+st.subheader("Barangay Suitability Map")
 st.pydeck_chart(deck)
 
 # ----------------------------------------------------------
