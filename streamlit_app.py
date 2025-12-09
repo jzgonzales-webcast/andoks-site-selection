@@ -94,7 +94,7 @@ def load_competitors_from_xlsx(path: str) -> pd.DataFrame:
     # Candidate names for each logical column
     long_candidates = ["longitude", "longtitude", "lon", "lng"]
     lat_candidates = ["latitude", "lat"]
-    brand_candidates = ["brand", "brand_name"]
+    brand_candidates = ["brand", "brand_name", "name"]
 
     def pick_column(candidates, available_cols):
         for c in candidates:
