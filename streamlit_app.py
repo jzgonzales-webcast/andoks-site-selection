@@ -172,8 +172,8 @@ def load_andoks_branches(path: str) -> pd.DataFrame:
 
     df["lat"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["lon"] = pd.to_numeric(df["longitude"], errors="coerce")
-    df["name"] = df["name"].astype(str)
-    df["address"] = df["address"].astype(str)
+    df["name"] = df["outlet name"].astype(str)
+    df["address"] = df["outlet address"].astype(str)
 
     df = df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
     return df
