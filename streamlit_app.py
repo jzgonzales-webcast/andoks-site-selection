@@ -77,6 +77,7 @@ def load_barangays(path: str) -> gpd.GeoDataFrame:
 
     return gdf
 
+
 gdf_barangays = load_barangays(BARANGAY_SHP_PATH)
 
 # ----------------------------------------------------------
@@ -145,7 +146,7 @@ def load_competitors_from_xlsx(path: str) -> pd.DataFrame:
 df_competitors = load_competitors_from_xlsx(COMPETITORS_XLSX_PATH)
 
 # ----------------------------------------------------------
-# LOAD ANDOK'S BRANCHES FROM XLSX
+# LOAD ANDOK'S BRANCHES FROM XLSX (SITE SELECTION MAP)
 # ----------------------------------------------------------
 
 @st.cache_data(show_spinner=True)
@@ -596,6 +597,23 @@ elif dashboard_choice == "Monthly Sales":
 
         gdf_joined["fill_color_sales"] = gdf_joined["sales_total"].apply(sales_color)
 
+        # Prepare branch points from monthly sales (unique by OUTLET CODE for this month)
+        df_branches_month = pd.DataFrame()
+        if {"OUTLET CODE", "Latitude", "Longitude"}.issubset(df_filtered_sales.columns):
+            df_branches_month = df_filtered_sales.copy()
+            df_branches_month["lat"] = pd.to_numeric(df_branches_month["Latitude"], errors="coerce")
+            df_branches_month["lon"] = pd.to_numeric(df_branches_month["Longitude"], errors="coerce")
+            df_branches_month = df_branches_month.dropna(subset=["lat", "lon"])
+            # Ensure uniqueness per branch for this month
+            df_branches_month = df_branches_month.sort_values(
+                "monthly_sales", ascending=False
+            ).drop_duplicates(subset=["OUTLET CODE"])
+        else:
+            st.warning(
+                "Columns 'OUTLET CODE', 'Latitude', 'Longitude' not found in monthly sales file. "
+                "Branches will not be plotted on the sales map."
+            )
+
         # Map view
         centroid = gdf_joined.geometry.unary_union.centroid
 
@@ -629,11 +647,25 @@ elif dashboard_choice == "Monthly Sales":
 
         layers_sales = [tile_layer_sales, muni_layer]
 
+        # Branches as black dots (high contrast)
+        if not df_branches_month.empty:
+            branch_layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=df_branches_month,
+                get_position="[lon, lat]",
+                get_fill_color=[0, 0, 0, 255],  # black
+                get_radius=100,                # meters
+                pickable=True,
+            )
+            layers_sales.append(branch_layer)
+
         tooltip_sales = {
             "html": (
                 "<b>{MUNICIPAL}</b><br/>"
                 f"Sales ({selected_year}-{int(selected_month):02d}): "
-                "<b>{sales_total}</b>"
+                "<b>{sales_total}</b><br/>"
+                "<hr/>"
+                "<b>{OUTLET NAME}</b><br/>{OUTLET CODE}"
             ),
             "style": {"backgroundColor": "steelblue", "color": "white"},
         }
