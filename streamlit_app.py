@@ -77,7 +77,6 @@ def load_barangays(path: str) -> gpd.GeoDataFrame:
 
     return gdf
 
-
 gdf_barangays = load_barangays(BARANGAY_SHP_PATH)
 
 # ----------------------------------------------------------
