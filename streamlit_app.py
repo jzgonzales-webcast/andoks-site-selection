@@ -19,15 +19,8 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Andok's – Bulacan Dashboards")
+st.title("Andok's Dashboards")
 
-st.markdown(
-    """
-Use the sidebar to switch between:
-- **Site Selection** dashboard  
-- **Monthly Sales** dashboard
-"""
-)
 
 # ----------------------------------------------------------
 # CONSTANTS
